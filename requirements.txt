@@ -1,0 +1,45 @@
+# ── Core ──────────────────────────────────────────────────────
+python-dotenv==1.0.0
+aiohttp==3.9.5
+httpx==0.27.0
+requests==2.32.3
+tenacity==8.3.0
+cachetools==5.3.3
+
+# ── Exchange & Market Data ─────────────────────────────────────
+ccxt==4.3.89
+pandas==2.2.2
+numpy==1.26.4
+
+# ── News & Feeds ───────────────────────────────────────────────
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+lxml==5.2.2
+
+# ── Macro Data (yfinance untuk DXY, VIX, dll) ─────────────────
+yfinance==0.2.40
+
+# ── Technical Analysis ────────────────────────────────────────
+pandas-ta==0.3.14b0
+
+# ── Charts ────────────────────────────────────────────────────
+matplotlib==3.9.0
+mplfinance==0.12.10b0
+Pillow==10.3.0
+
+# ── AI — Gemini PRIMARY ───────────────────────────────────────
+google-generativeai==0.7.2
+
+# ── AI — Ensemble opsional ────────────────────────────────────
+openai==1.35.0
+anthropic==0.29.0
+
+# ── Scheduler ─────────────────────────────────────────────────
+apscheduler==3.10.4
+
+# ── Display ───────────────────────────────────────────────────
+rich==13.7.1
+tabulate==0.9.0
+
+# ── Notifications ─────────────────────────────────────────────
+python-telegram-bot==21.3

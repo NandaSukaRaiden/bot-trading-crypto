@@ -1,0 +1,43 @@
+# ── Secrets — JANGAN PERNAH PUSH ─────────────────────────────
+.env
+
+# ── Python cache ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environment ───────────────────────────────────────
+venv/
+env/
+.venv/
+ENV/
+
+# ── Bot state files (data runtime, bukan source code) ─────────
+portfolio_state.json
+paper_trade_log.json
+market_snapshot.json
+
+# ── Charts (generated, bukan source code) ────────────────────
+charts/
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS files ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Build ─────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
