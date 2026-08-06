@@ -20,6 +20,7 @@ from data_fetcher import (
 from technical_analyzer import multi_timeframe_analysis
 from news_fetcher import get_full_market_context
 from ai_analyzer import analyze_with_ai, AI_AVAILABLE, get_active_providers
+from smart_trigger import should_call_ai_for_entry, get_trigger_stats
 from risk_manager import RiskManager, RiskConfig
 from portfolio import Portfolio
 from testnet_executor import (
@@ -29,7 +30,7 @@ from testnet_executor import (
 from config import (
     CRYPTO_WATCHLIST, SYMBOL_MAX_LEVERAGE,
     TRADING_STYLE, DEFAULT_LEVERAGE, MAX_LEVERAGE,
-    USE_TESTNET,
+    USE_TESTNET, USE_SMART_TRIGGER,
 )
 
 console = Console()
@@ -146,10 +147,39 @@ async def main():
             pctx["max_positions"]         = 3
             pctx["open_positions_detail"] = []
 
-            console.print(f"  Calling AI ensemble...")
-            ai = await analyze_with_ai(
-                pair, tech, metrics, pctx, market_ctx, ob, rt, {}
-            )
+            # ── SMART TRIGGER CHECK ──────────────────────────
+            call_ai = True
+            trigger_reason = "SINGLE_RUN"
+            
+            if USE_SMART_TRIGGER:
+                call_ai, trigger_reason = should_call_ai_for_entry(
+                    pair, tech, metrics, market_ctx
+                )
+                
+                if not call_ai:
+                    console.print(f"  [dim cyan]⚡ SKIP AI: {trigger_reason}[/dim cyan]")
+                    # Pakai teknikal pure
+                    ai = {
+                        "action": "HOLD",
+                        "overall_score": tech.get("score", 0),
+                        "confidence": 20,
+                        "confluence_score": 50,
+                        "verdict": f"Teknikal: {trigger_reason}",
+                        "skip_ai": True,
+                        "_ai_count": 0,
+                        "action_votes": {"HOLD": 1},
+                    }
+                else:
+                    console.print(f"  [bold green]🚨 TRIGGER: {trigger_reason}[/bold green]")
+                    console.print(f"  Calling AI ensemble...")
+                    ai = await analyze_with_ai(
+                        pair, tech, metrics, pctx, market_ctx, ob, rt, {}
+                    )
+            else:
+                console.print(f"  Calling AI ensemble...")
+                ai = await analyze_with_ai(
+                    pair, tech, metrics, pctx, market_ctx, ob, rt, {}
+                )
 
             action    = ai.get("action", "HOLD")
             n_models  = ai.get("_ai_count", 0)
@@ -278,6 +308,16 @@ async def main():
         if is_live_mode() else
         "[yellow]PAPER — simulasi lokal, tidak ada order nyata[/yellow]"
     )
+    
+    # Trigger stats
+    trigger_stats = get_trigger_stats()
+    trigger_note = ""
+    if USE_SMART_TRIGGER and trigger_stats.get("trigger_count", 0) + trigger_stats.get("skip_count", 0) > 0:
+        trigger_note = (f"\n\n[bold cyan]Smart Trigger Stats:[/bold cyan]\n"
+                       f"  AI Calls    : {trigger_stats['trigger_count']}\n"
+                       f"  Skipped     : {trigger_stats['skip_count']}\n"
+                       f"  API Reduction: [green]{trigger_stats['reduction_pct']:.0f}%[/green]")
+    
     console.print(Panel(
         f"[bold green]RINGKASAN[/bold green]\n\n"
         f"  Mode      : {mode_note}\n"
@@ -287,7 +327,8 @@ async def main():
         f"  Modal     : ${capital:,.2f}\n"
         f"  Tersisa   : ${port.available_margin:,.2f}\n"
         f"  Equity    : ${port.equity:,.2f}\n\n"
-        f"  AI        : [cyan]{ai_str}[/cyan]\n\n"
+        f"  AI        : [cyan]{ai_str}[/cyan]"
+        f"{trigger_note}\n\n"
         f"[bold]Loop otomatis:[/bold]\n"
         f"  python trading_bot.py",
         border_style="green"

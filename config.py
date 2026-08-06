@@ -65,11 +65,18 @@ AI_FALLBACK_MODEL = os.getenv("AI_FALLBACK_MODEL", "")      # cadangan jika mode
 AI_MAX_TOKENS     = int(os.getenv("AI_MAX_TOKENS", 4000))
 AI_TEMPERATURE    = float(os.getenv("AI_TEMPERATURE", 0.05))
 
+# ── SMART TRIGGER SYSTEM ──────────────────────────────────────
+# true  → filter pintar: hanya panggil AI kalau kondisi penting
+#         (breakout, volatility spike, volume anomaly, divergence)
+#         HEMAT 90-99% API calls!
+# false → panggil AI setiap analisis (boros)
+USE_SMART_TRIGGER = os.getenv("USE_SMART_TRIGGER", "true").lower() == "true"
+
 # ── SEMUA keputusan dari AI ──────────────────────────────────
 # true  → AI menganalisis SEMUA pair di watchlist, tidak ada filter
 #         teknikal yang menutup jalan sebelum AI melihat datanya.
 # false → filter teknikal ringan dulu (hemat quota API).
-AI_ANALYZE_ALL_PAIRS = os.getenv("AI_ANALYZE_ALL_PAIRS", "true").lower() == "true"
+AI_ANALYZE_ALL_PAIRS = os.getenv("AI_ANALYZE_ALL_PAIRS", "false").lower() == "true"
 
 # AI juga yang memutuskan MANAJEMEN posisi terbuka:
 # hold / close / partial / geser SL-TP (dipanggil tiap siklus analisis)

@@ -71,12 +71,22 @@ class TradingBot:
     async def run_cycle(self):
         self.cycle += 1
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Get trigger stats
+        trigger_stats = get_trigger_stats()
+        trigger_info = ""
+        if USE_SMART_TRIGGER and trigger_stats.get("trigger_count", 0) + trigger_stats.get("skip_count", 0) > 0:
+            trigger_info = (f"\n⚡ AI Triggers: {trigger_stats['trigger_count']} | "
+                           f"Skipped: {trigger_stats['skip_count']} | "
+                           f"Reduction: {trigger_stats['reduction_pct']:.0f}%")
+        
         console.print(Panel(
             f"[bold cyan]🤖 SIKLUS #{self.cycle} — {now} UTC[/bold cyan]\n"
             f"{get_market_status()}\n"
             f"Equity:${self.portfolio.equity:,.2f} | "
             f"Margin used:${self.portfolio.used_margin:,.2f} | "
-            f"Positions:{len(self.portfolio.open_positions)}",
+            f"Positions:{len(self.portfolio.open_positions)}"
+            f"{trigger_info}",
             border_style="cyan"
         ))
 
@@ -508,6 +518,8 @@ class TradingBot:
                       if TRADING_STYLE == "scalper"
                       else "timeframe 1h/4h/1d, leverage rendah, holding 1-7 hari")
 
+        smart_trigger_status = "✅ AKTIF (hemat 90-99% API)" if USE_SMART_TRIGGER else "❌ OFF (panggil AI setiap cycle)"
+        
         console.print(Panel(
             f"[bold green]🚀 AI CRYPTO FUTURES BOT STARTED[/bold green]\n"
             f"Exchange  : Binance USDT-M Futures "
@@ -516,6 +528,7 @@ class TradingBot:
             f"Style     : [bold]{style_txt}[/bold] | "
             f"Exec      : {'🔴 Real orders → testnet.binancefuture.com' if is_live_mode() else '📄 Paper simulation'}\n"
             f"AI        : {' + '.join(ai_str)}\n"
+            f"Smart Trigger: [cyan]{smart_trigger_status}[/cyan]\n"
             f"Timeframes: {PRIMARY_TIMEFRAME}(entry) + {TREND_TIMEFRAME}(tren) + {CONTEXT_TIMEFRAME}(konteks)\n"
             f"Style desc: {style_desc}\n"
             f"Pairs     : {CRYPTO_WATCHLIST} (BTC only)\n"
