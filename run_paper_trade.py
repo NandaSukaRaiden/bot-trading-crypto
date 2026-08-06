@@ -1,11 +1,13 @@
 """
-run_paper_trade.py — Eksekusi percobaan paper trading SATU siklus penuh.
-Gunakan Teknikal Fallback (tanpa AI key) untuk demo eksekusi.
-Saat Gemini quota tersedia, ganti ke AI mode otomatis.
+run_paper_trade.py — Satu siklus analisis + eksekusi BTC/USDT.
+
+TRADING_MODE=paper → simulasi lokal
+TRADING_MODE=live  → order nyata ke Binance Futures Testnet
 """
-import asyncio, json
+import asyncio, json, traceback
 from datetime import datetime
-from dotenv import load_dotenv; load_dotenv()
+from dotenv import load_dotenv
+load_dotenv()
 
 from rich.console import Console
 from rich.panel import Panel
@@ -13,286 +15,305 @@ from rich.table import Table
 
 from data_fetcher import (
     fetch_ticker_binance, fetch_ohlcv, fetch_order_book,
-    fetch_recent_trades, fetch_funding_rate, fetch_open_interest
+    fetch_recent_trades, fetch_funding_rate, fetch_open_interest,
 )
 from technical_analyzer import multi_timeframe_analysis
+from news_fetcher import get_full_market_context
+from ai_analyzer import analyze_with_ai, AI_AVAILABLE, get_active_providers
 from risk_manager import RiskManager, RiskConfig
 from portfolio import Portfolio
-from config import SYMBOL_MAX_LEVERAGE, TAKER_FEE_RATE
+from testnet_executor import (
+    is_live_mode, set_leverage, place_market_order,
+    place_stop_loss, place_take_profit, get_account_balance,
+)
+from config import (
+    CRYPTO_WATCHLIST, SYMBOL_MAX_LEVERAGE,
+    TRADING_STYLE, DEFAULT_LEVERAGE, MAX_LEVERAGE,
+    USE_TESTNET,
+)
 
 console = Console()
 
-# ── Konfigurasi percobaan ─────────────────────────────────────
-PAIRS        = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
-CAPITAL      = 1000.0   # $1000 USDT paper
-RISK_PCT     = 1.0      # 1% per trade
-MIN_SCORE    = 5        # sangat rendah hanya untuk demo eksekusi
-MIN_ADX      = 10       # minimal ada sedikit tren
-MAX_LEVERAGE = 5        # max 5x untuk percobaan konservatif
+PAIRS     = CRYPTO_WATCHLIST   # ["BTC/USDT"]
+RISK_PCT  = 0.5                # % equity per trade
+TFS       = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
 
 async def main():
+    # ── 0. Tentukan modal ─────────────────────────────────────
+    capital = 1000.0
+    if is_live_mode():
+        bal  = await get_account_balance()
+        free = bal.get("USDT", {}).get("free", 0)
+        if free > 0:
+            capital = free
+
+    # ── Banner ─────────────────────────────────────────────────
+    mode_str = "[bold red]TESTNET LIVE[/bold red]" if is_live_mode() else "[bold yellow]PAPER[/bold yellow]"
+    net_str  = "testnet.binancefuture.com" if USE_TESTNET else "binance.com"
+    ai_str   = " + ".join(get_active_providers()) if AI_AVAILABLE else "TEKNIKAL FALLBACK"
+
     console.print(Panel(
-        "[bold cyan]🤖 PAPER TRADING — SIKLUS PERCOBAAN[/bold cyan]\n"
-        f"Modal    : ${CAPITAL:,.0f} USDT\n"
-        f"Risk/trade: {RISK_PCT}% | Max Leverage: {MAX_LEVERAGE}x\n"
-        f"Waktu    : {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-        f"Mode     : Technical Analysis (Gemini AI akan aktif saat quota tersedia)",
+        f"[bold cyan]BOT TRADING — {TRADING_STYLE.upper()} BTC/USDT[/bold cyan]\n"
+        f"Mode       : {mode_str}\n"
+        f"Exchange   : {net_str}\n"
+        f"Modal      : ${capital:,.2f} USDT\n"
+        f"Risk/trade : {RISK_PCT}% | Leverage: {DEFAULT_LEVERAGE:.0f}x–{MAX_LEVERAGE:.0f}x\n"
+        f"AI Ensemble: [green]{ai_str}[/green]\n"
+        f"Waktu      : {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
         border_style="cyan"
     ))
 
-    # Init portfolio & risk manager baru untuk percobaan
-    port = Portfolio(initial_capital=CAPITAL)
-    port.balance = CAPITAL              # reset bersih
-    port.open_positions.clear()
-    port.closed_trades.clear()
+    # ── 1. Init portfolio + risk manager ──────────────────────
+    port = Portfolio(initial_capital=capital)
+    if not is_live_mode():
+        port.balance = capital
+        port.open_positions.clear()
+        port.closed_trades.clear()
+        port._save_state()
 
-    risk_cfg = RiskConfig(
-        initial_capital        = CAPITAL,
-        max_risk_per_trade_pct = RISK_PCT,
-        max_open_positions     = 3,
-        default_leverage       = 3,
-        max_leverage           = MAX_LEVERAGE,
-        min_rrr                = 2.0,
-        min_score_to_trade     = MIN_SCORE,
-        min_confidence         = 40.0,
-        min_confluence_score   = 0,      # skip confluence check untuk demo
-        max_risk_level_to_trade= "HIGH",
-        daily_loss_limit_pct   = 5.0,
-        loss_cooldown_minutes  = 0,
-    )
-    rm = RiskManager(risk_cfg)
+    rm = RiskManager(RiskConfig(
+        initial_capital         = capital,
+        max_risk_per_trade_pct  = RISK_PCT,
+        max_open_positions      = 3,
+        default_leverage        = DEFAULT_LEVERAGE,
+        max_leverage            = MAX_LEVERAGE,
+        min_rrr                 = 1.5,
+        min_score_to_trade      = 50,   # lebih rendah agar fallback teknikal bisa masuk
+        min_confidence          = 25.0,  # turunkan untuk testing (AI rate limit)
+        min_confluence_score    = 50,
+        max_risk_level_to_trade = "HIGH",
+        daily_loss_limit_pct    = 2.0,
+        loss_cooldown_minutes   = 5,
+    ))
 
-    # ── STEP 1: Fetch & Analisis Semua Pair ───────────────────
-    console.print("\n[bold]STEP 1: Fetch data & analisis teknikal[/bold]")
+    # ── 2. Analisis AI ─────────────────────────────────────────
+    console.print(f"\n[bold]STEP 1 — FETCH + AI ANALYSIS ({len(PAIRS)} pair)[/bold]")
 
-    analysis_table = Table(title="📊 Hasil Analisis Teknikal", style="cyan", show_lines=True)
-    analysis_table.add_column("Pair",      width=12)
-    analysis_table.add_column("Price",     justify="right", width=12)
-    analysis_table.add_column("24h%",      justify="right", width=8)
-    analysis_table.add_column("Score",     justify="right", width=8)
-    analysis_table.add_column("Regime",    width=14)
-    analysis_table.add_column("RSI",       justify="right", width=6)
-    analysis_table.add_column("ADX",       justify="right", width=6)
-    analysis_table.add_column("Funding",   justify="right", width=10)
-    analysis_table.add_column("OB Imbal",  justify="right", width=10)
-    analysis_table.add_column("Tape",      justify="right", width=10)
-    analysis_table.add_column("Signal",    width=10)
+    tbl = Table(title="AI Analysis — BTC Testnet", style="cyan", show_lines=True)
+    for col, w, j in [
+        ("Pair",10,"left"),("Price",13,"right"),("24h%",8,"right"),
+        ("Score",7,"right"),("Conf",7,"right"),("Confluence",11,"right"),
+        ("Regime",12,"left"),("Funding",10,"right"),("Models",7,"right"),
+        ("Action",9,"center"),
+    ]:
+        tbl.add_column(col, width=w, justify=j)
 
     candidates = []
 
     for pair in PAIRS:
         try:
-            # Fetch data
+            console.print(f"\n[bold cyan]── {pair} ──[/bold cyan]")
+
             t   = fetch_ticker_binance(pair)
             ob  = fetch_order_book(pair)
             rt  = fetch_recent_trades(pair)
             fr  = fetch_funding_rate(pair)
             oi  = fetch_open_interest(pair)
+            price = t.get("price", 0)
+            console.print(f"  Price: ${price:,.2f} | 24h: {t.get('change_24h_pct',0):+.2f}%")
 
-            price   = t.get("price", 0)
-            chg24   = t.get("change_24h_pct", 0)
-            imb     = ob.get("depth_imbalance", 0)
-            buy_pct = rt.get("buy_ratio_pct", 50)
+            frames = {}
+            for tf in TFS:
+                try:
+                    frames[tf] = fetch_ohlcv(pair, tf, 200)
+                except Exception as e:
+                    console.print(f"    [dim]{tf}: {e}[/dim]")
 
-            # OHLCV multi-TF
-            df1h = fetch_ohlcv(pair, "1h", 100)
-            df4h = fetch_ohlcv(pair, "4h",  80)
-            df1d = fetch_ohlcv(pair, "1d",  50)
-            tech = multi_timeframe_analysis({"1h": df1h, "4h": df4h, "1d": df1d}, fr)
-
-            score    = tech.get("score", 0)
-            regime   = tech.get("market_regime", "?")
-            rsi      = tech.get("primary_rsi", 50)
-            adx      = tech.get("primary_adx", 0)
-            conflict = tech.get("tf_conflict", False)
-            sl_pct   = tech.get("suggested_sl_pct", 2.0)
-            tp1_pct  = tech.get("suggested_tp1_pct", 4.0)
-            tp2_pct  = tech.get("suggested_tp2_pct", 6.0)
-            sr       = tech.get("support_resistance", {})
-
-            # Tentukan sinyal
-            if conflict:
-                signal = "AVOID"
-                signal_color = "dim"
-            elif abs(score) < 5:
-                signal = "HOLD"
-                signal_color = "yellow"
-            elif score >= 5 and fr < 0.002:
-                signal = "LONG"
-                signal_color = "green"
-            elif score <= -5:
-                signal = "SHORT"
-                signal_color = "red"
-            else:
-                signal = "HOLD"
-                signal_color = "yellow"
-
-            # Hitung SL/TP
-            if signal == "LONG":
-                sl  = round(price * (1 - sl_pct / 100), 6)
-                tp1 = round(price * (1 + tp1_pct / 100), 6)
-                tp2 = round(price * (1 + tp2_pct / 100), 6)
-            elif signal == "SHORT":
-                sl  = round(price * (1 + sl_pct / 100), 6)
-                tp1 = round(price * (1 - tp1_pct / 100), 6)
-                tp2 = round(price * (1 - tp2_pct / 100), 6)
-            else:
-                sl = tp1 = tp2 = price
-
-            chg_color = "green" if chg24 >= 0 else "red"
-            sc_color  = "green" if score > 15 else ("red" if score < -15 else "yellow")
-
-            analysis_table.add_row(
-                pair,
-                f"${price:,.4f}",
-                f"[{chg_color}]{chg24:+.2f}%[/{chg_color}]",
-                f"[{sc_color}]{score:+.1f}[/{sc_color}]",
-                regime,
-                f"{rsi:.1f}",
-                f"{adx:.1f}",
-                f"{fr*100:+.4f}%",
-                f"{imb:+.1f}%",
-                f"{buy_pct:.0f}%B/{100-buy_pct:.0f}%S",
-                f"[{signal_color}]{signal}[/{signal_color}]",
+            tech = multi_timeframe_analysis(frames, fr)
+            console.print(
+                f"  TA: score={tech.get('score',0):+.0f} | "
+                f"regime={tech.get('market_regime','?')} | "
+                f"conflict={tech.get('tf_conflict',False)}"
             )
 
-            if signal in ("LONG", "SHORT"):
+            metrics = {
+                "symbol": pair, "price": price,
+                "high_24h": t.get("high_24h", 0),
+                "low_24h": t.get("low_24h", 0),
+                "change_24h_pct": t.get("change_24h_pct", 0),
+                "volume_24h": t.get("volume_24h", 0),
+                "funding_rate": fr,
+                "open_interest": oi,
+            }
+
+            console.print(f"  Fetching news...")
+            market_ctx = await get_full_market_context(pair)
+
+            pctx = port.get_context_for_ai()
+            pctx["has_position"]          = pair in port.open_positions
+            pctx["risk_per_trade_pct"]    = RISK_PCT
+            pctx["max_positions"]         = 3
+            pctx["open_positions_detail"] = []
+
+            console.print(f"  Calling AI ensemble...")
+            ai = await analyze_with_ai(
+                pair, tech, metrics, pctx, market_ctx, ob, rt, {}
+            )
+
+            action    = ai.get("action", "HOLD")
+            n_models  = ai.get("_ai_count", 0)
+            votes     = ai.get("action_votes", {})
+            ac        = {"LONG":"green","SHORT":"red","HOLD":"yellow","AVOID":"dim"}.get(action,"white")
+            cc        = "green" if t.get("change_24h_pct", 0) >= 0 else "red"
+
+            tbl.add_row(
+                pair,
+                f"${price:,.2f}",
+                f"[{cc}]{t.get('change_24h_pct',0):+.2f}%[/{cc}]",
+                f"{ai.get('overall_score',0):.0f}",
+                f"{ai.get('confidence',0):.0f}%",
+                f"{ai.get('confluence_score',0):.0f}",
+                tech.get("market_regime", "?"),
+                f"{fr*100:+.4f}%",
+                str(n_models),
+                f"[{ac}]{action}[/{ac}]",
+            )
+
+            console.print(
+                f"  [{ac}]{action}[/{ac}] score={ai.get('overall_score',0):.0f} "
+                f"conf={ai.get('confidence',0):.0f}% "
+                f"confluence={ai.get('confluence_score',0):.0f} "
+                f"votes={votes} models={n_models}"
+            )
+            if ai.get("verdict"):
+                console.print(f"  Verdict: {ai['verdict'][:120]}")
+
+            if action in ("LONG", "SHORT"):
                 candidates.append({
-                    "pair": pair, "signal": signal, "price": price,
-                    "score": abs(score), "adx": adx, "rsi": rsi,
-                    "sl": sl, "tp1": tp1, "tp2": tp2,
-                    "sl_pct": sl_pct, "tp1_pct": tp1_pct,
-                    "fr": fr, "imb": imb, "buy_pct": buy_pct,
-                    "tech": tech,
+                    "pair": pair, "signal": action,
+                    "price": price, "ai": ai, "tech": tech,
                 })
 
         except Exception as e:
             console.print(f"  [red]Error {pair}: {e}[/red]")
+            console.print(f"  [dim]{traceback.format_exc()[-400:]}[/dim]")
 
-    console.print(analysis_table)
+    console.print(tbl)
 
-    # ── STEP 2: Terapkan Risk Filter & Eksekusi ───────────────
-    console.print(f"\n[bold]STEP 2: Risk filter & eksekusi paper trade[/bold]")
-    console.print(f"  Kandidat: {len(candidates)} pair memiliki sinyal")
-
-    # Sort by absolute score DESC
-    candidates.sort(key=lambda x: x["score"], reverse=True)
+    # ── 3. Risk check + eksekusi ───────────────────────────────
+    console.print(f"\n[bold]STEP 2 — RISK CHECK + EKSEKUSI ({len(candidates)} kandidat)[/bold]")
+    candidates.sort(key=lambda x: x["ai"].get("overall_score", 0), reverse=True)
 
     executed = 0
     for c in candidates:
         pair   = c["pair"]
         signal = c["signal"]
         price  = c["price"]
+        ai     = c["ai"]
 
-        console.print(f"\n[bold]  → Proses {signal} {pair} @ ${price:,.4f}[/bold]")
+        console.print(f"\n  [{('green' if signal=='LONG' else 'red')}]{signal}[/] {pair} @ ${price:,.2f}")
 
-        # Buat AI result dummy dari teknikal
-        ai_result = {
-            "action":            signal,
-            "confidence":        min(80, 40 + c["score"]),
-            "risk_level":        "MEDIUM" if c["adx"] > 20 else "HIGH",
-            "overall_score":     min(100, MIN_SCORE + c["score"]),
-            "confluence_score":  70 if not c["tech"].get("tf_conflict") else 30,
-            "stop_loss":         c["sl"],
-            "take_profit_1":     c["tp1"],
-            "take_profit_2":     c["tp2"],
-            "leverage":          3,
-            "position_size_pct": RISK_PCT,
-            "risk_reward_ratio": round(c["tp1_pct"] / c["sl_pct"], 2),
-            "holding_period":    "swing_1-3hari",
-            "action_votes":      {signal: 2},
-            "_ai_count":         2,
-            "verdict":           f"Teknikal {signal}: score={c['score']:+.0f}, ADX={c['adx']:.1f}",
-        }
-
-        max_lev = SYMBOL_MAX_LEVERAGE.get(pair, 5)
-        chk = rm.check_order(pair, signal, ai_result, price, port, max_lev)
+        rm.set_ai_risk_multiplier(ai.get("suggested_risk_multiplier", 1.0))
+        chk = rm.check_order(pair, signal, ai, price, port,
+                             SYMBOL_MAX_LEVERAGE.get(pair, MAX_LEVERAGE))
 
         if not chk.approved:
-            console.print(f"    [red]✗ BLOCKED: {chk.reason}[/red]")
+            console.print(f"    [red]BLOCKED: {chk.reason}[/red]")
             continue
 
         for w in chk.warnings:
             console.print(f"    [dim]{w}[/dim]")
 
+        eff_lev     = int(chk.effective_leverage)
+        entry_price = price
+
+        # Kirim ke Binance testnet jika live
+        if is_live_mode():
+            await set_leverage(pair, eff_lev)
+            order = await place_market_order(pair, signal, chk.adjusted_notional, price)
+            if order is None:
+                console.print(f"    [red]Market order gagal, skip.[/red]")
+                continue
+            entry_price = order["fill_price"]
+            qty         = order["qty"]
+            await place_stop_loss(pair, signal, chk.stop_loss, qty)
+            await place_take_profit(pair, signal, chk.take_profit_1, round(qty * 0.5, 6))
+
         pos = port.open_position(
             symbol        = pair,
             side          = signal,
-            entry_price   = price,
+            entry_price   = entry_price,
             notional      = chk.adjusted_notional,
             leverage      = chk.effective_leverage,
             stop_loss     = chk.stop_loss,
             take_profit_1 = chk.take_profit_1,
             take_profit_2 = chk.take_profit_2,
-            ai_result     = ai_result,
+            ai_result     = ai,
         )
 
         if pos:
             executed += 1
-            liq_dist = abs(price - pos.liquidation_price) / price * 100
+            tag   = "TESTNET" if is_live_mode() else "PAPER"
+            sl_d  = abs(entry_price - pos.stop_loss) / entry_price * 100
+            liq_d = abs(entry_price - pos.liquidation_price) / entry_price * 100
             console.print(
-                f"    [bold green]✅ ORDER DIBUKA[/bold green]\n"
-                f"    {signal} {pair} @ ${price:,.4f}\n"
-                f"    Notional : ${pos.notional:,.2f} USDT\n"
-                f"    Margin   : ${pos.margin:,.2f} USDT @ {pos.leverage:.0f}x\n"
-                f"    Stop Loss: ${pos.stop_loss:,.4f} (-{c['sl_pct']:.2f}%)\n"
-                f"    Target 1 : ${pos.take_profit_1:,.4f} (+{c['tp1_pct']:.2f}%)\n"
-                f"    Target 2 : ${pos.take_profit_2:,.4f}\n"
-                f"    Liq Price: ${pos.liquidation_price:,.4f} ({liq_dist:.1f}% dari entry)\n"
-                f"    RRR      : 1:{ai_result['risk_reward_ratio']:.1f}"
+                f"\n    [bold green]ORDER DIBUKA [{tag}][/bold green]\n"
+                f"    {signal} {pair} @ ${entry_price:,.4f} | {eff_lev}x\n"
+                f"    Notional : ${pos.notional:,.2f} | Margin: ${pos.margin:,.2f}\n"
+                f"    SL       : ${pos.stop_loss:,.4f} (-{sl_d:.2f}%)\n"
+                f"    TP1      : ${pos.take_profit_1:,.4f}\n"
+                f"    TP2      : ${pos.take_profit_2:,.4f}\n"
+                f"    Liq      : ${pos.liquidation_price:,.4f} ({liq_d:.1f}% dari entry)\n"
+                f"    RRR      : 1:{ai.get('risk_reward_ratio',0):.1f}\n"
+                f"    Votes    : {ai.get('action_votes',{})}\n"
+                f"    Models   : {', '.join(ai.get('_sources',[]))}\n"
+                f"    Verdict  : {(ai.get('verdict') or '')[:150]}"
             )
 
-    # ── STEP 3: Ringkasan Portfolio ───────────────────────────
-    console.print(f"\n[bold]STEP 3: Status portfolio setelah eksekusi[/bold]")
-
-    # Ambil harga terkini untuk unrealized P&L
+    # ── 4. Portfolio summary ───────────────────────────────────
+    console.print(f"\n[bold]STEP 3 — PORTFOLIO[/bold]")
     cur_prices = {}
-    for pair in [p for p in PAIRS if p in port.open_positions]:
-        try:
-            t = fetch_ticker_binance(pair)
-            cur_prices[pair] = t.get("price", 0)
-        except Exception:
-            pass
-
+    for pair in PAIRS:
+        if pair in port.open_positions:
+            try:
+                cur_prices[pair] = fetch_ticker_binance(pair).get("price", 0)
+            except Exception:
+                pass
     port.print_portfolio(cur_prices)
 
-    # ── STEP 4: Ringkasan Eksekusi ────────────────────────────
+    # ── 5. Summary panel ──────────────────────────────────────
+    mode_note = (
+        "[bold red]TESTNET LIVE — order nyata dikirim ke testnet.binancefuture.com[/bold red]"
+        if is_live_mode() else
+        "[yellow]PAPER — simulasi lokal, tidak ada order nyata[/yellow]"
+    )
     console.print(Panel(
-        f"[bold green]📋 RINGKASAN EKSEKUSI PERCOBAAN[/bold green]\n\n"
-        f"  Pair dianalisis  : {len(PAIRS)}\n"
-        f"  Sinyal teknikal  : {len(candidates)}\n"
-        f"  Order dieksekusi : {executed}\n"
-        f"  Modal awal       : ${CAPITAL:,.2f}\n"
-        f"  Kas tersisa      : ${port.available_margin:,.2f}\n"
-        f"  Margin dipakai   : ${port.used_margin:,.2f}\n"
-        f"  Equity sekarang  : ${port.equity:,.2f}\n\n"
-        f"[yellow]Mode: PAPER TRADING (tidak ada uang nyata)[/yellow]\n"
-        f"[cyan]Saat Gemini quota aktif: jalankan python trading_bot.py[/cyan]\n\n"
-        f"[bold]Cara monitor posisi ini:[/bold]\n"
-        f"  python dashboard.py    ← lihat P&L realtime\n"
-        f"  python charts.py BTC/USDT ← lihat chart",
+        f"[bold green]RINGKASAN[/bold green]\n\n"
+        f"  Mode      : {mode_note}\n"
+        f"  Analisis  : {len(PAIRS)} pair\n"
+        f"  Kandidat  : {len(candidates)}\n"
+        f"  Dieksekusi: {executed}\n"
+        f"  Modal     : ${capital:,.2f}\n"
+        f"  Tersisa   : ${port.available_margin:,.2f}\n"
+        f"  Equity    : ${port.equity:,.2f}\n\n"
+        f"  AI        : [cyan]{ai_str}[/cyan]\n\n"
+        f"[bold]Loop otomatis:[/bold]\n"
+        f"  python trading_bot.py",
         border_style="green"
     ))
 
-    # Simpan log
+    # ── 6. Simpan log ─────────────────────────────────────────
     log = {
-        "timestamp":  datetime.utcnow().isoformat(),
-        "capital":    CAPITAL,
-        "executed":   executed,
-        "positions":  [
+        "timestamp":      datetime.utcnow().isoformat(),
+        "mode":           "testnet_live" if is_live_mode() else "paper",
+        "capital":        capital,
+        "style":          TRADING_STYLE,
+        "ai_providers":   get_active_providers(),
+        "executed":       executed,
+        "positions": [
             {
-                "pair":    sym,
-                "side":    pos.side,
-                "entry":   pos.entry_price,
-                "notional":pos.notional,
-                "margin":  pos.margin,
-                "leverage":pos.leverage,
-                "sl":      pos.stop_loss,
-                "tp1":     pos.take_profit_1,
-                "liq":     pos.liquidation_price,
+                "pair":     sym,
+                "side":     p.side,
+                "entry":    p.entry_price,
+                "notional": p.notional,
+                "margin":   p.margin,
+                "leverage": p.leverage,
+                "sl":       p.stop_loss,
+                "tp1":      p.take_profit_1,
+                "liq":      p.liquidation_price,
             }
-            for sym, pos in port.open_positions.items()
+            for sym, p in port.open_positions.items()
         ],
         "cash_remaining": port.balance,
     }

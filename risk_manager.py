@@ -18,6 +18,8 @@ from rich.console import Console
 from config import (
     INITIAL_CAPITAL_USDT, MAX_RISK_PER_TRADE, DEFAULT_LEVERAGE,
     MAX_LEVERAGE, MIN_AI_SCORE_TO_TRADE, SYMBOL_MAX_LEVERAGE, TAKER_FEE_RATE,
+    MIN_RRR, MIN_SL_DISTANCE_PCT, DAILY_LOSS_LIMIT_PCT,
+    WEEKLY_LOSS_LIMIT_PCT, MAX_DRAWDOWN_PCT,
 )
 
 console = Console()
@@ -31,24 +33,25 @@ class RiskConfig:
     max_single_notional_pct: float = 30.0      # max 1 posisi = 30% equity
     max_open_positions: int        = 4         # fokus, tidak scatter
 
-    default_leverage: float        = DEFAULT_LEVERAGE          # 3x default
-    max_leverage: float            = MAX_LEVERAGE              # 10x hard cap
-    min_rrr: float                 = 2.5       # RRR minimum naik ke 1:2.5
+    default_leverage: float        = DEFAULT_LEVERAGE          # 10x default (scalper)
+    max_leverage: float            = MAX_LEVERAGE              # 20x hard cap
+    min_rrr: float                 = MIN_RRR                   # scalper: 1.5
     liquidation_safety: float      = 0.50      # SL harus hit sebelum 50% margin habis
+    min_sl_distance: float         = MIN_SL_DISTANCE_PCT / 100  # SL min (scalper 0.1%)
 
-    # Loss limits
-    daily_loss_limit_pct: float    = 2.5       # 2.5% per hari lebih ketat
-    weekly_loss_limit_pct: float   = 6.0
-    max_drawdown_pct: float        = 12.0      # circuit breaker lebih awal
+    # Loss limits (dari env — proteksi utama scalper)
+    daily_loss_limit_pct: float    = DAILY_LOSS_LIMIT_PCT      # 2% per hari
+    weekly_loss_limit_pct: float   = WEEKLY_LOSS_LIMIT_PCT     # 5% per minggu
+    max_drawdown_pct: float        = MAX_DRAWDOWN_PCT          # 10% circuit breaker
 
     # AI quality filters
-    min_score_to_trade: float      = MIN_AI_SCORE_TO_TRADE    # 72
-    min_confidence: float          = 65.0      # naik dari 55
-    min_confluence_score: float    = 60.0      # filter baru: confluence AI
-    max_risk_level_to_trade: str   = "MEDIUM"  # lebih ketat: HIGH tidak diizinkan
+    min_score_to_trade: float      = MIN_AI_SCORE_TO_TRADE    # 65
+    min_confidence: float          = 55.0      # confidence minimum
+    min_confluence_score: float    = 55.0      # filter confluence AI
+    max_risk_level_to_trade: str   = "HIGH"    # izinkan HIGH untuk testnet scalper
 
     # Cooldown
-    loss_cooldown_minutes: int     = 30        # naik dari 15 menit
+    loss_cooldown_minutes: int     = 5         # 5 menit cooldown (testnet)
 
     # Order minimum
     min_order_notional: float      = 15.0      # minimum $15
@@ -97,6 +100,17 @@ class RiskManager:
         self.cb_reason     = ""
         self._day_start    = datetime.now().date()
         self._week_start   = datetime.now().date() - timedelta(days=datetime.now().weekday())
+        # Multiplier risiko yang disarankan AI (0.25 = sangat hati-hati,
+        # 1.0 = normal, 1.5 = pasar sangat jelas). Dipakai untuk sizing.
+        self.risk_multiplier = 1.0
+
+    def set_ai_risk_multiplier(self, multiplier: float):
+        """Atur multiplier risiko dari rekomendasi AI (dibatasi aman)."""
+        try:
+            m = float(multiplier)
+        except (TypeError, ValueError):
+            m = 1.0
+        self.risk_multiplier = max(0.25, min(1.5, m))
 
     def _check_reset(self):
         today = datetime.now().date()
@@ -223,13 +237,14 @@ class RiskManager:
             sl_price = current_price * (1 - sl_pct/100) if side == "LONG" else current_price * (1 + sl_pct/100)
 
         sl_distance = abs(current_price - sl_price) / current_price
-        if sl_distance <= 0.002:   # SL terlalu dekat (< 0.2%)
-            sl_price = current_price * (1 - 0.004) if side == "LONG" else current_price * (1 + 0.004)
-            sl_distance = 0.004
-            warnings.append("SL terlalu dekat → digeser ke 0.4%")
+        min_sl = cfg.min_sl_distance
+        if sl_distance <= min_sl:   # SL terlalu dekat (scalper: < 0.1%)
+            sl_price = current_price * (1 - min_sl * 2) if side == "LONG" else current_price * (1 + min_sl * 2)
+            sl_distance = min_sl * 2
+            warnings.append(f"SL terlalu dekat → digeser ke {sl_distance*100:.2f}%")
 
-        # ── 14. Risk sizing ──
-        risk_amount = equity * (cfg.max_risk_per_trade_pct / 100)
+        # ── 14. Risk sizing (dengan multiplier risiko dari AI) ──
+        risk_amount = equity * (cfg.max_risk_per_trade_pct / 100) * self.risk_multiplier
         notional    = risk_amount / sl_distance
         max_notional = equity * (cfg.max_single_notional_pct / 100)
         if side == "SHORT":

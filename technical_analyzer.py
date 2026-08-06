@@ -7,7 +7,19 @@ Multi-TF: 1h (50%) + 4h (30%) + 1d (20%) dengan konfirmasi wajib
 """
 import numpy as np
 import pandas as pd
-from config import TA_CONFIG
+from config import TA_CONFIG, TRADING_STYLE
+
+# ── Konfigurasi SL/TP per gaya trading ─────────────────────────
+# scalper: SL ketat (0.25-1.5%), TP dekat (RRR 1:2), banyak trade cepat
+# swing  : SL lebar (1.2-5%), TP jauh (RRR 1:2.5+)
+if TRADING_STYLE == "scalper":
+    _SL_MIN, _SL_MAX = 0.25, 1.5
+    _SL_ATR_MULT     = 1.2
+    _RR1, _RR2       = 2.0, 3.2
+else:
+    _SL_MIN, _SL_MAX = 1.2, 5.0
+    _SL_ATR_MULT     = 1.5
+    _RR1, _RR2       = 2.5, 4.0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -617,10 +629,10 @@ def _score_one_tf(df: pd.DataFrame, cfg: dict, funding_rate: float = 0.0) -> dic
                  "STRONG_SHORT"if score <= -60 else
                  "SHORT"       if score <= -25 else "NEUTRAL")
 
-    # ATR SL/TP
-    sl_pct  = round(max(1.2, min(5.0, v_atr_pct * 1.5)), 2)
-    tp1_pct = round(sl_pct * 2.5, 2)
-    tp2_pct = round(sl_pct * 4.0, 2)
+    # ATR SL/TP — mengikuti gaya trading (scalper = ketat)
+    sl_pct  = round(max(_SL_MIN, min(_SL_MAX, v_atr_pct * _SL_ATR_MULT)), 2)
+    tp1_pct = round(sl_pct * _RR1, 2)
+    tp2_pct = round(sl_pct * _RR2, 2)
 
     return {
         "score":         round(score, 1),
@@ -680,14 +692,21 @@ def full_technical_analysis(df, timeframe_label="1h", funding_rate=0.0):
 # ═══════════════════════════════════════════════════════════════
 def multi_timeframe_analysis(dataframes: dict, funding_rate: float = 0.0) -> dict:
     """
-    Gabungkan analisis 3 timeframe dengan bobot berbeda:
-      1h  → 50%  (keputusan entry)
-      4h  → 30%  (konfirmasi tren)
-      1d  → 20%  (konteks makro)
+    Gabungkan analisis multi-timeframe dengan bobot tergantung gaya trading:
+      scalper → 1m/5m/15m (entry) + 1h (tren) + 4h/1d (konteks)
+      swing   → 1h (50%) + 4h (30%) + 1d (20%)
 
-    Aturan konflik: jika 1h dan 4h berlawanan → skor dikurangi 55%
+    Aturan konflik: jika timeframe entry dan tren berlawanan → skor dikurangi 55%
     """
-    weights = {"1h": 0.50, "4h": 0.30, "1d": 0.20}
+    if TRADING_STYLE == "scalper":
+        weights = {"1m": 0.15, "5m": 0.30, "15m": 0.25, "1h": 0.15, "4h": 0.10, "1d": 0.05}
+        conflict_pair = ("5m", "1h")   # entry vs tren
+        primary_tf    = "5m"
+    else:
+        weights = {"1h": 0.50, "4h": 0.30, "1d": 0.20}
+        conflict_pair = ("1h", "4h")
+        primary_tf    = "1h"
+
     results = {}
     combined = 0.0
     w_total  = 0.0
@@ -695,12 +714,14 @@ def multi_timeframe_analysis(dataframes: dict, funding_rate: float = 0.0) -> dic
     for tf, df in dataframes.items():
         if df is None or len(df) < 35:
             continue
+        w = weights.get(tf)
+        if w is None:
+            continue    # timeframe tidak dipakai gaya ini
         r = _score_one_tf(df, TA_CONFIG, funding_rate)
         if "error" in r:
             continue
         r["timeframe"] = tf
         results[tf] = r
-        w = weights.get(tf, 0.25)
         combined += r["score"] * w
         w_total  += w
 
@@ -715,12 +736,12 @@ def multi_timeframe_analysis(dataframes: dict, funding_rate: float = 0.0) -> dic
         combined /= w_total
     combined = max(-100, min(100, combined))
 
-    # ── Cek konflik 1h vs 4h ──
-    bias_1h = results.get("1h", {}).get("direction_bias", "NEUTRAL")
-    bias_4h = results.get("4h", {}).get("direction_bias", "NEUTRAL")
-    tf_conflict = (bias_1h in ("LONG","SHORT")
-                   and bias_4h in ("LONG","SHORT")
-                   and bias_1h != bias_4h)
+    # ── Cek konflik entry vs tren ──
+    bias_a = results.get(conflict_pair[0], {}).get("direction_bias", "NEUTRAL")
+    bias_b = results.get(conflict_pair[1], {}).get("direction_bias", "NEUTRAL")
+    tf_conflict = (bias_a in ("LONG","SHORT")
+                   and bias_b in ("LONG","SHORT")
+                   and bias_a != bias_b)
     if tf_conflict:
         combined *= 0.45   # hukum berat jika konflik
 
@@ -745,7 +766,8 @@ def multi_timeframe_analysis(dataframes: dict, funding_rate: float = 0.0) -> dic
         confidence *= 0.6
 
     # ── Primary TF untuk SL/TP/signals ──
-    primary = results.get("1h") or results.get("4h") or next(iter(results.values()))
+    primary = results.get(primary_tf) or results.get("5m") or results.get("1h") \
+        or results.get("15m") or results.get("4h") or next(iter(results.values()))
 
     return {
         "score":             round(combined, 1),
