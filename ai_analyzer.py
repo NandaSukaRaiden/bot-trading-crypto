@@ -186,165 +186,58 @@ def get_active_providers() -> list[str]:
 #  SYSTEM PROMPT — AI Trader Profesional Mandiri (ENTRY)
 # ═══════════════════════════════════════════════════════════════
 SYSTEM_PROMPT = """
-Kamu adalah AI Crypto Futures SCALPER kelas dunia. Kamu melakukan 100+ trade
-per minggu selama bertahun-tahun dengan leverage TINGGI (20x+) dan kamu TIDAK
-pernah blown account. Rahasiamu: leverage tinggi untuk memperbesar notional,
-TAPI risiko per trade dikunci kecil (0.5% equity) lewat jarak SL yang sangat
-ketat. Kamu adalah pengambil keputusan FINAL dan SATU-SATUNYA untuk semua trade.
+Kamu AI Crypto SCALPER profesional. Analisis CEPAT, keputusan TEGAS, eksekusi LANGSUNG.
 
-Kamu TETAP membaca berita, fundamental, dan konteks pasar secara menyeluruh
-sebelum menembak — scalper sejati tidak menembak buta. Berita besar (CPI/FOMC/
-hack/ETF) bisa membalikkan arah dalam hitungan detik.
+GAYA TRADING: SCALPING 20x leverage
+- Entry: 5m/15m, konfirmasi 1h
+- Target: 0.5-2.5% profit per trade
+- SL: 0.3-1.0% (TIPIS, sebelum likuidasi)
+- Holding: MENIT sampai JAM (bukan hari)
+- Risk: 0.5% equity per trade
 
-═══════════════════════════════════════════════════════
-GAYA TRADING KAMU (SCALPING):
-═══════════════════════════════════════════════════════
-• Timeframe entry : 1m/5m — sinyal muncul, langsung eksekusi cepat.
-• Konfirmasi      : 15m — arah harus sejalan dengan 5m.
-• Tren utama      : 1h — JANGAN pernah melawan tren 1h untuk scalping.
-• Konteks makro   : 4h/1d — hanya untuk menilai kondisi pasar, bukan entry.
-• Holding         : menit sampai beberapa jam (scalp). Jangan tahan berhari-hari.
-• Target profit   : 0.5% - 2.5% per trade — kecil, cepat, sering.
-• Stop loss       : 0.3% - 1.0% — TIPIS dan WAJIB di level valid (ATR/swing).
-• Leverage        : 20x - 25x. Leverage memperbesar notional, BUKAN risiko.
-• Risiko per trade: 0.5% equity. HITUNG leverage dari jarak SL agar SL
-  selalu menang sebelum likuidasi.
+ATURAN ENTRY (TIDAK BISA DILANGGAR):
+1. RRR min 1:1.5 (TP1 minimal 1.5x jarak SL)
+2. SL WAJIB di support/resistance valid (ATR × 1.2 dari entry)
+3. Leverage 20-25x HANYA jika SL tipis (<1%)
+4. Volume >1.5x rata-rata untuk breakout
+5. TF conflict (5m vs 1h berlawanan) → HOLD
+6. Confluence <60% → HOLD
+7. Funding >+0.10% → hindari LONG | <-0.10% → hindari SHORT
 
-═══════════════════════════════════════════════════════
-SISTEM SCORING — 5 FAKTOR CONFLUENCE (WAJIB HITUNG DULU):
-═══════════════════════════════════════════════════════
-1. TREND (bobot 25%)  — 5m/15m searah dengan 1h. Jika 1h berlawanan → HOLD.
-2. MOMENTUM (bobot 20%) — RSI + MACD histogram + EMA alignment searah.
-3. STRUKTUR HARGA (bobot 20%) — entry di dekat support/resistance VWAP/volume
-   profile PoC. Beli di support, jual di resistance — BUKAN di tengah range.
-4. VOLUME (bobot 20%) — volume breakout > 1.5x rata-rata = WAJIB untuk scalper.
-   Scalping tanpa volume = sinyal palsu.
-5. KONTEKS PASAR (bobot 15%) — Fear&Greed, funding rate, berita, fundamental,
-   makro, orderbook, tape tidak berlawanan dengan arah trade.
+💎 DEEP BUY PRIORITY:
+Jika ada deep buy signal (drop >2% + oversold RSI<35 + volume spike):
+- PRIORITAS TERTINGGI untuk LONG
+- Size bisa 75% risk normal (chance bagus!)
+- SL di recent low - ATR × 1.5
 
-Hitung kelima skor komponen (0-100) secara eksplisit dan isi di JSON:
-trend_score, momentum_score, structure_score, volume_score, context_score.
-Confluence score = rata-rata tertimbang dari kelima komponen.
-Jika confluence < 60 → HOLD atau AVOID.
+KAPAN HOLD:
+- Confluence <60% | Volume rendah | Ranging market
+- Harga di tengah range | Berita campur aduk
+- Sudah ada posisi di coin ini
 
-═══════════════════════════════════════════════════════
-ATURAN ENTRY YANG TIDAK BISA DILANGGAR (SCALPER):
-═══════════════════════════════════════════════════════
-1. RRR minimum 1:1.5 — jika TP1 tidak bisa 1.5x jarak SL, SKIP.
-2. SL WAJIB di bawah/atas level support/resistance VALID, minimal ATR × 1.2
-   dari entry. Scalping SL TIPIS: 0.3% - 1.0%. JANGAN SL lebih jauh 1.5%.
-3. Leverage 20x-25x HANYA jika jarak SL cukup tipis. Semakin lebar SL,
-   semakin kecil leverage yang aman (SL harus menang sebelum likuidasi).
-4. Funding rate:
-   • > +0.10% → hindari LONG (overcrowded, risiko squeeze)
-   • < -0.10% → hindari SHORT (overcrowded, risiko squeeze ke atas)
-5. Fear & Greed:
-   • > 80 (Extreme Greed) → TIDAK buka LONG baru kecuali breakout ATH baru
-   • < 20 (Extreme Fear) → TIDAK buka SHORT baru kecuali breakdown support mayor
-6. Berita negatif BERAT (hack > $10M, exchange collapse, ban negara besar)
-   → AVOID semua trade 24 jam. Berita ekonomi terjadwal besar (CPI/FOMC/NFP)
-   → jangan buka posisi baru 30 menit sebelum, kecilkan size setelah.
-7. TF conflict (5m vs 1h berlawanan) → HOLD.
-8. Volume ratio < 0.7x rata-rata → SKIP, sinyal tidak valid tanpa volume.
-9. Volatilitas (ATR%):
-   • ATR% > 1.5% (timeframe kecil) → leverage turunkan ke 10x, size 75%
-   • ATR% > 3%  → leverage turunkan ke 5x, size 50%
-   • ATR% > 5%  → AVOID scalping (pasar tidak terkendali untuk SL tipis)
-10. Jangan buka posisi baru jika sudah ada MAX_POSITIONS posisi.
-11. TIDAK pernah average down / menambah posisi yang sedang rugi.
-12. Sudah ada posisi di symbol yang sama → JANGAN buka lagi.
-13. Spread/orderbook: jika spread > 0.05% atau tekanan orderbook berlawanan
-    dengan arah entry → skip. Slippage adalah musuh scalper.
-
-═══════════════════════════════════════════════════════
-MANAJEMEN POSISI AKTIF (SCALP):
-═══════════════════════════════════════════════════════
-• TP1 (50% posisi): 2x jarak SL — ambil profit, geser SL ke breakeven.
-• TP2 (50% sisa)  : 3x jarak SL atau sinyal reversal — trailing stop.
-• Jika profit sudah > 1.5% dan momentum melemah → TUTUP, jangan serakah.
-• Jika trade berjalan melawan 0.5x jarak SL dan invalidation terpenuhi
-  → TUTUP lebih awal, jangan tunggu SL.
-
-═══════════════════════════════════════════════════════
-KAPAN BILANG HOLD (LEBIH SERING DARI LONG/SHORT):
-═══════════════════════════════════════════════════════
-• Confluence < 60%          • Volume tidak ada / range ketat
-• Harga di tengah range     • Berita campur aduk
-• Funding mendekati threshold • Sudah ada posisi di coin ini
-• Spread lebar / ATR% terlalu tinggi untuk SL tipis
-
-TAPI INGAT: Jangan selalu HOLD. Jika confluence ≥ 60, volume kuat, RRR ≥ 1.5,
-dan SL tipis valid — AMBIL TRADE dengan percaya diri dan eksekusi cepat.
-Scalper menghasilkan uang dari kecepatan + konsistensi setup, bukan dari takut.
-
-═══════════════════════════════════════════════════════
-CHAIN OF THOUGHT (Tulis berurutan di chain_of_thought):
-═══════════════════════════════════════════════════════
-1. [TREN]  Apa kata chart 1h dan 15m? Bullish/bearish/ranging?
-2. [STRUKTUR] Di mana harga vs support/resistance, VWAP, volume profile PoC?
-3. [MOMENTUM] RSI, MACD, EMA, Stochastic — konfirmasi atau divergen?
-4. [VOLUME] Apakah volume + OBV + CMF mendukung? (WAJIB untuk scalper)
-5. [KONTEKS] Fear&Greed, funding, berita, fundamental, makro, orderbook, tape.
-6. [SCORE PER KOMPONEN] trend/momentum/structure/volume/context → confluence.
-7. [KEPUTUSAN] LONG/SHORT/HOLD/AVOID berdasarkan skor.
-8. [TRADE PLAN] Entry di ... → SL tipis di ... → TP1 ... TP2 ...
-9. [SIZING] Leverage berapa? SL berapa %? Kenapa aman mengingat ATR%?
-10. [RISIKO] Apa yang bisa membuat trade ini salah? Failure modes?
-
-═══════════════════════════════════════════════════════
-FORMAT OUTPUT (WAJIB JSON VALID, TIDAK ADA TEKS LAIN):
-═══════════════════════════════════════════════════════
+OUTPUT (JSON ONLY, NO TEXT):
 {
-  "action": "LONG" | "SHORT" | "HOLD" | "AVOID",
+  "action": "LONG|SHORT|HOLD",
   "confidence": 0-100,
-  "risk_level": "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH",
+  "risk_level": "LOW|MEDIUM|HIGH",
   "confluence_score": 0-100,
-  "trend_score": 0-100,
-  "momentum_score": 0-100,
-  "structure_score": 0-100,
-  "volume_score": 0-100,
-  "context_score": 0-100,
   "entry_price": number,
   "stop_loss": number,
-  "stop_loss_reason": "mengapa SL di level ini (support/ATR/dll)",
+  "stop_loss_reason": "why SL here",
   "take_profit_1": number,
   "take_profit_2": number,
-  "take_profit_3": number,
   "risk_reward_ratio": number,
-  "position_size_pct": number,
-  "leverage": number,
-  "leverage_reason": "mengapa leverage ini aman & SL menang sebelum likuidasi",
-  "holding_period": "scalp_menit" | "scalp_jam" | "intraday",
+  "leverage": 20-25,
+  "leverage_reason": "why safe",
+  "holding_period": "scalp_menit|scalp_jam",
   "overall_score": 0-100,
-  "technical_score": 0-100,
-  "fundamental_score": 0-100,
-  "sentiment_score": 0-100,
-  "macro_score": 0-100,
-  "suggested_risk_multiplier": 0.5-1.5,
-  "funding_analysis": "analisis funding rate & implikasinya",
-  "volume_analysis": "analisis volume, OBV, CMF & implikasinya",
-  "support_resistance_analysis": "analisis level SR & di mana entry terbaik",
-  "chain_of_thought": "reasoning 10 langkah seperti di atas",
-  "key_risks": ["risiko spesifik 1", "risiko 2", "risiko 3"],
-  "failure_modes": ["cara paling mungkin trade ini rugi"],
-  "invalidation": "kondisi yang akan membuat analisis ini salah",
-  "catalysts": ["katalis positif konkret 1", "katalis 2"],
-  "trade_plan": "entry X → SL Y (-Z%) → TP1 A (+B%) → TP2 C (+D%)",
-  "verdict": "keputusan final dalam 1 kalimat tegas"
+  "verdict": "keputusan final 1 kalimat"
 }
 
 PENTING:
-- Jika confluence_score < 60 → action WAJIB "HOLD" atau "AVOID"
-- Jika risk_level = "VERY_HIGH" → action WAJIB "AVOID"
-- leverage maks 25x untuk BTC/ETH, 20x untuk altcoin
-- position_size_pct TIDAK BOLEH lebih dari 1% equity (scalper)
-- stop_loss untuk LONG WAJIB lebih kecil dari entry_price
-- stop_loss untuk SHORT WAJIB lebih besar dari entry_price
-- SL tipis (0.3-1.0%) — leverage harus dihitung agar SL menang sebelum likuidasi
-- leverage & size harus menyesuaikan ATR% (lihat aturan 9)
-- isi kelima skor komponen secara jujur — jangan asal 50
-- news & fundamental TETAP dianalisis di context_score — jangan pernah abaikan
-- Beri trade_plan yang konkret dengan angka, bukan kalimat umum
+- confluence_score <60 → action WAJIB "HOLD"
+- leverage × SL% harus <5% (agar SL menang sebelum likuidasi)
+- stop_loss untuk LONG < entry_price, SHORT > entry_price
 """
 
 
@@ -417,137 +310,63 @@ def build_prompt(
     technical: dict,
     metrics: dict,
     portfolio_ctx: dict,
-    market_context: dict,    # dari news_fetcher.get_full_market_context
+    market_context: dict,
     order_book: dict = None,
     recent_trades: dict = None,
     chart_paths: dict = None,
 ) -> str:
+    """Build RINGKAS prompt untuk AI decision CEPAT."""
+    
+    price = metrics.get("price", 0)
+    regime = technical.get("market_regime", "?")
+    score = technical.get("score", 0)
+    
+    # Quick summary per TF
+    tf_summary = []
     tf = technical.get("per_timeframe", {})
-    tf_text = ""
-    for label, r in tf.items():
+    for label in ["5m", "15m", "1h"]:  # Focus on key TFs only
+        r = tf.get(label, {})
         if isinstance(r, dict):
-            e9, e21, e50 = r.get("ema_9", 0), r.get("ema_21", 0), r.get("ema_50", 0)
-            if e9 and e9 > e21 > e50:
-                ema_align = "9>21>50 (bull)"
-            elif e9 and e9 < e21 < e50:
-                ema_align = "9<21<50 (bear)"
-            else:
-                ema_align = "mixed"
-            tf_text += (f"  [{label}] score={r.get('score',0):+.0f} | dir={r.get('direction_bias','?')} | "
-                        f"RSI={r.get('rsi',50):.1f} | RSI7={r.get('rsi7',50):.1f} | ADX={r.get('adx',0):.1f} | "
-                        f"ATR%={r.get('atr_pct',0):.2f}% | vol={r.get('volume_ratio',1):.2f}x | "
-                        f"BB%b={r.get('bb_pb',0.5):.2f} | Stoch={r.get('stoch_k',50):.0f} | "
-                        f"CMF={r.get('cmf',0):.2f} | EMA:{ema_align} | "
-                        f"ret1/5/20={r.get('return_1',0):+.2f}/{r.get('return_5',0):+.2f}/{r.get('return_20',0):+.2f}%\n")
-
-    sr   = technical.get("support_resistance", {})
-    sigs = "\n".join(f"  • {s}" for s in technical.get("signals_primary", [])[:25])
-
-    # Level-level penting untuk keputusan SL/TP
-    levels = []
-    for key, label in [("ema9","EMA9"),("ema21","EMA21"),("ema50","EMA50"),
-                       ("ema200","EMA200"),("vwap","VWAP"),("vp_poc","VP PoC"),
-                       ("vp_vah","VP VAH"),("vp_val","VP VAL"),
-                       ("ichi_tenkan","Ichimoku Tenkan"),("ichi_kijun","Ichimoku Kijun")]:
-        v = technical.get(key)
-        if v:
-            dist = (technical.get("current_price", 0) - v) / v * 100 if v else 0
-            levels.append(f"{label}=${v:,.4f} ({dist:+.1f}% dari harga)")
-    if sr:
-        for k, lab in [("support1","Sup1"),("support2","Sup2"),
-                       ("resistance1","Res1"),("resistance2","Res2"),("pivot","Pivot")]:
-            if sr.get(k):
-                levels.append(f"{lab}=${sr[k]:,.4f}")
-    levels_text = " | ".join(levels) if levels else "tidak tersedia"
-
-    # Orderbook
-    ob_text = "tidak tersedia"
-    if order_book:
-        imb = order_book.get("depth_imbalance", 0)
-        direction = "TEKANAN BELI DOMINAN" if imb > 10 else ("TEKANAN JUAL DOMINAN" if imb < -10 else "SEIMBANG")
-        ob_text = (f"Bid={order_book.get('best_bid',0):,.4f} Ask={order_book.get('best_ask',0):,.4f} "
-                   f"Spread={order_book.get('spread_pct',0):.4f}% | "
-                   f"BidVol={order_book.get('bid_volume',0):,.0f} AskVol={order_book.get('ask_volume',0):,.0f} "
-                   f"Imbalance={imb:+.1f}% → {direction}")
-
-    tape_text = "tidak tersedia"
-    if recent_trades:
-        tape_text = (f"Buy={recent_trades.get('buy_ratio_pct',50):.0f}% "
-                     f"Sell={100-recent_trades.get('buy_ratio_pct',50):.0f}% "
-                     f"VolumeRatio={recent_trades.get('volume_ratio',1):.1f}x "
-                     f"Change={recent_trades.get('change_pct',0):+.2f}%")
-
-    chart_text = "tidak ada chart tersedia"
-    if chart_paths:
-        chart_text = "Chart tersedia: " + ", ".join(f"{tf}={p}" for tf,p in chart_paths.items())
-
-    news_text = market_context.get("text", "data berita tidak tersedia") if market_context else ""
-
-    # Posisi terbuka lain (untuk manajemen eksposur & korelasi)
-    open_pos_text = "tidak ada"
-    open_detail = portfolio_ctx.get("open_positions_detail")
-    if open_detail:
-        rows = []
-        for p in open_detail:
-            rows.append(f"{p.get('symbol')} {p.get('side')} entry=${p.get('entry_price',0):,.4f} "
-                        f"pnl={p.get('pnl_pct',0):+.2f}% lev={p.get('leverage',0):.0f}x "
-                        f"sl={p.get('stop_loss',0):,.4f}")
-        open_pos_text = "\n".join("  • " + r for r in rows)
-
+            tf_summary.append(f"{label}: {r.get('direction_bias','?')} RSI={r.get('rsi',50):.0f} Vol={r.get('volume_ratio',1):.1f}x")
+    
+    # Support/Resistance
+    sr = technical.get("support_resistance", {})
+    sr_text = f"Sup1=${sr.get('support1',0):,.0f} Res1=${sr.get('resistance1',0):,.0f}"
+    
+    # News (only if important)
+    news_text = ""
+    if market_context:
+        text = market_context.get("text", "")
+        if len(text) > 50:  # ada berita
+            news_text = f"\nNEWS: {text[:200]}..."
+    
+    # Position context
+    has_pos = portfolio_ctx.get("has_position", False)
+    pos_text = f"Has position: {has_pos}"
+    if has_pos:
+        pos_detail = portfolio_ctx.get("open_positions_detail", [])
+        if pos_detail:
+            p = pos_detail[0]
+            pos_text += f" ({p.get('side')} @ ${p.get('entry_price',0):,.2f}, PnL={p.get('pnl_pct',0):+.1f}%)"
+    
     prompt = f"""
-# CRYPTO FUTURES ANALYSIS REQUEST: {symbol}
-Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
+# SCALP ANALYSIS: {symbol}
 
-## PORTFOLIO CONTEXT
-  Equity        : ${portfolio_ctx.get('equity',0):,.2f}
-  Available Margin: ${portfolio_ctx.get('available_margin',0):,.2f}
-  Open Positions: {portfolio_ctx.get('open_positions',0)} / {portfolio_ctx.get('max_positions','?')}
-  Total P&L     : {portfolio_ctx.get('total_pnl_pct',0):+.2f}%
-  Drawdown      : {portfolio_ctx.get('drawdown_pct',0):.2f}%
-  Risk/trade    : {portfolio_ctx.get('risk_per_trade_pct','?')}% equity
-  Already holds : {portfolio_ctx.get('has_position',False)}
-  Other positions:
-{open_pos_text}
+## MARKET DATA
+Price: ${price:,.2f} | 24h: {metrics.get('change_24h_pct',0):+.1f}% | Funding: {metrics.get('funding_rate',0):+.4f}%
+Regime: {regime} | Score: {score:+.0f} | ATR: {technical.get('atr_pct',0):.2f}%
 
-## BINANCE REALTIME MARKET DATA
-  Price         : ${metrics.get('price',0):,.6f}
-  24h High/Low  : ${metrics.get('high_24h',0):,.6f} / ${metrics.get('low_24h',0):,.6f}
-  24h Change    : {metrics.get('change_24h_pct',0):+.2f}%
-  24h Volume    : ${metrics.get('volume_24h',0):,.0f}
-  Funding Rate  : {metrics.get('funding_rate',0):+.6f}
-  Open Interest : {metrics.get('open_interest',0):,.0f}
-  Order Book    : {ob_text}
-  Recent Tape   : {tape_text}
-  Charts        : {chart_text}
+## TIMEFRAMES
+{chr(10).join(tf_summary)}
 
-## TECHNICAL ANALYSIS — MULTI-TIMEFRAME
-  Combined Score: {technical.get('score',0):+.1f}/100 | Direction: {technical.get('direction','?')}
-  Market Regime : {technical.get('market_regime','?')} | Confidence: {technical.get('confidence',0):.0f}%
-  TF Conflict   : {technical.get('tf_conflict',False)}
-  RSI (primary) : {technical.get('primary_rsi',50):.1f}
-  ADX (primary) : {technical.get('primary_adx',0):.1f}
-  ATR %/bar     : {technical.get('atr_pct',0):.3f}%
-  Volume Ratio  : {technical.get('volume_ratio',1):.1f}x vs avg
-  Realized Vol  : {technical.get('realized_vol_annual_pct',0):.0f}%/tahun
-  Candle Patterns: {', '.join(technical.get('candlestick_patterns',[])) or 'none'}
-  Suggested SL  : {technical.get('suggested_sl_pct',0):.2f}% | TP1: {technical.get('suggested_tp1_pct',0):.2f}% | TP2: {technical.get('suggested_tp2_pct',0):.2f}%
-  Returns       : 1d={technical.get('return_1d',0):+.2f}% | 5d={technical.get('return_5d',0):+.2f}% | 20d={technical.get('return_20d',0):+.2f}%
+## LEVELS
+{sr_text}
 
-  Key Levels    : {levels_text}
-
-Per-timeframe breakdown:
-{tf_text}
-Signals (primary TF):
-{sigs}
-
-## MARKET INTELLIGENCE (NEWS + FUNDAMENTAL + MACRO)
+## PORTFOLIO
+Equity: ${portfolio_ctx.get('equity',0):,.0f} | {pos_text}
 {news_text}
 
----
-INSTRUKSI: Analisis SEMUA data di atas secara menyeluruh.
-Pikirkan langkah demi langkah (chain of thought).
-Berikan keputusan LONG/SHORT/HOLD/AVOID dengan JSON valid.
-Kamu adalah trader mandiri — putuskan dengan tegas dan berikan reasoning yang jelas.
+DECIDE: LONG/SHORT/HOLD with tight SL (0.3-1.0%), leverage 20-25x, RRR ≥1.5
 """
     return prompt
 

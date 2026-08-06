@@ -56,6 +56,10 @@ class SmartTrigger:
         """
         reasons = []
         
+        # ── 0. DEEP BUY CHECK (PRIORITAS TERTINGGI!) ─────────
+        if self._check_deep_buy_opportunity(technical, metrics):
+            reasons.append("🚨DEEP_BUY")
+        
         # ── 1. BREAKOUT CHECK ─────────────────────────────────
         if self._check_breakout(technical, metrics):
             reasons.append("BREAKOUT")
@@ -165,6 +169,47 @@ class SmartTrigger:
     # ═══════════════════════════════════════════════════════════
     #  INTERNAL CHECKS
     # ═══════════════════════════════════════════════════════════
+    
+    def _check_deep_buy_opportunity(self, technical: dict, metrics: dict) -> bool:
+        """
+        Deep Buy = sudden drop + reversal signal (oversold + volume spike).
+        Perfect untuk catch bottom sebelum rebound.
+        """
+        price = metrics.get("price", 0)
+        
+        # 1. Check recent sharp drop (return -2% atau lebih dalam 5 bar)
+        tf = technical.get("per_timeframe", {})
+        for label, r in tf.items():
+            if not isinstance(r, dict):
+                continue
+            
+            ret_5 = r.get("return_5", 0)
+            ret_1 = r.get("return_1", 0)
+            
+            # Sharp drop tapi mulai rebound
+            if ret_5 < -2.0 and ret_1 > -0.5:  # turun 2%+ lalu mulai naik
+                # 2. Check oversold condition
+                rsi = r.get("rsi", 50)
+                rsi7 = r.get("rsi7", 50)
+                stoch_k = r.get("stoch_k", 50)
+                
+                if rsi < 35 or rsi7 < 35 or stoch_k < 25:  # oversold
+                    # 3. Check volume spike (confirm reversal)
+                    vol_ratio = technical.get("volume_ratio", 1.0)
+                    if vol_ratio > 1.3:  # volume naik
+                        console.print(f"    [bold green]💎 DEEP BUY OPPORTUNITY DETECTED![/bold green]")
+                        console.print(f"      Drop: {ret_5:.1f}% | RSI: {rsi:.0f} | Vol: {vol_ratio:.1f}x")
+                        return True
+        
+        # 4. Check wick rejection (strong support)
+        signals = technical.get("signals_primary", [])
+        for sig in signals:
+            if "hammer" in sig.lower() or "doji" in sig.lower() or "engulfing" in sig.lower():
+                vol_ratio = technical.get("volume_ratio", 1.0)
+                if vol_ratio > 1.2:
+                    return True
+        
+        return False
     
     def _check_breakout(self, technical: dict, metrics: dict) -> bool:
         """Breakout = harga tembus level penting + volume tinggi."""
